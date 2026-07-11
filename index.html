@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MLSD · Карта POI Москвы</title>
+
+<!-- Leaflet -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<!-- Leaflet.markercluster -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css">
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css">
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+
+<!-- Leaflet.draw -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css">
+<script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+
+<!-- PapaParse (CSV) -->
+<script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
+
+<!-- SheetJS (выгрузка XLSX) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<header class="app-header">
+  <button id="btn-sidebar" class="hamburger" title="Панель">☰</button>
+  <div class="header-title">
+    <h1>MLSD · Карта POI Москвы</h1>
+    <span id="header-stats" class="header-sub">Загрузка данных…</span>
+  </div>
+</header>
+
+<div class="app-body">
+
+  <aside id="sidebar" class="sidebar">
+
+    <!-- Карточка: данные -->
+    <section class="card card-accent">
+      <h2 class="card-title">Данные</h2>
+      <div class="stat-grid">
+        <div class="stat-tile stat-blue">
+          <span class="stat-value" id="stat-total">—</span>
+          <span class="stat-label">всего точек</span>
+        </div>
+        <div class="stat-tile stat-green">
+          <span class="stat-value" id="stat-visible">—</span>
+          <span class="stat-label">на карте</span>
+        </div>
+      </div>
+      <div id="data-files" class="data-files"></div>
+    </section>
+
+    <!-- Карточка: фильтры -->
+    <section class="card">
+      <h2 class="card-title">Фильтры <span class="card-hint">рубрика → специализация</span></h2>
+      <div class="btn-row">
+        <button id="btn-filter-all" class="btn btn-small">Все</button>
+        <button id="btn-filter-none" class="btn btn-small">Ничего</button>
+      </div>
+      <div id="filter-tree" class="filter-tree"></div>
+    </section>
+
+    <!-- Карточка: режим отображения -->
+    <section class="card">
+      <h2 class="card-title">Отображение</h2>
+      <div class="mode-grid">
+        <button id="mode-points" class="mode-btn">Точки</button>
+        <button id="mode-clusters" class="mode-btn active">Кластеры</button>
+        <button id="mode-pie" class="mode-btn">Диаграммы</button>
+        <button id="mode-hex" class="mode-btn">Гексагоны</button>
+        <button id="mode-okruga" class="mode-btn">По округам</button>
+        <button id="mode-rayony" class="mode-btn">По районам</button>
+      </div>
+      <div id="hex-controls" class="hex-controls hidden">
+        <label class="range-label">Ячейка: <b id="hex-size-label">10 га</b></label>
+        <input type="range" id="hex-size" min="5" max="50" step="1" value="10">
+      </div>
+      <div id="indicator-controls" class="hex-controls hidden">
+        <span class="legend-title">Знаменатель картосхемы</span>
+        <div class="mode-grid" style="margin-top:6px">
+          <button id="ind-abs" class="mode-btn active">Абсолют</button>
+          <button id="ind-area" class="mode-btn">На км²</button>
+          <button id="ind-pop" class="mode-btn">На 100 тыс.</button>
+        </div>
+      </div>
+      <div id="agg-legend-box" class="agg-legend-box hidden">
+        <span id="agg-legend-title" class="legend-title"></span>
+        <div id="agg-legend" class="hex-legend"></div>
+      </div>
+    </section>
+
+    <!-- Карточка: границы -->
+    <section class="card">
+      <h2 class="card-title">Административные границы</h2>
+      <label class="check-row"><input type="checkbox" id="layer-okruga"> <span>Округа Москвы</span></label>
+      <label class="check-row"><input type="checkbox" id="layer-rayony"> <span>Районы Москвы</span></label>
+      <label class="check-row"><input type="checkbox" id="layer-sadovoe"> <span>Садовое кольцо</span></label>
+      <label class="check-row"><input type="checkbox" id="layer-ttk"> <span>Третье транспортное (ТТК)</span></label>
+      <label class="check-row"><input type="checkbox" id="layer-mkad"> <span>МКАД</span></label>
+    </section>
+
+    <!-- Карточка: подложка -->
+    <section class="card">
+      <h2 class="card-title">Подложка</h2>
+      <div class="mode-grid mode-grid-2">
+        <button id="base-positron" class="mode-btn active">Positron</button>
+        <button id="base-gray" class="mode-btn">Серая</button>
+        <button id="base-dark" class="mode-btn">Тёмная</button>
+        <button id="base-osm" class="mode-btn">OSM</button>
+      </div>
+    </section>
+
+    <!-- Карточка: выгрузка по зоне -->
+    <section class="card">
+      <h2 class="card-title">Зона и выгрузка</h2>
+      <p class="card-text">Нарисуйте полигон или прямоугольник на карте — и выгрузите точки, попавшие в зону.</p>
+      <div class="btn-row">
+        <button id="btn-draw-polygon" class="btn">▰ Полигон</button>
+        <button id="btn-draw-rect" class="btn">▭ Прямоугольник</button>
+      </div>
+      <div id="selection-result" class="selection-result hidden">
+        <div class="stat-tile stat-orange">
+          <span class="stat-value" id="stat-selected">0</span>
+          <span class="stat-label">точек в зоне</span>
+        </div>
+        <div class="btn-row">
+          <button id="btn-export-csv" class="btn btn-accent">CSV</button>
+          <button id="btn-export-xlsx" class="btn btn-accent">XLSX</button>
+          <button id="btn-export-geojson" class="btn btn-accent">GeoJSON</button>
+          <button id="btn-clear-zone" class="btn">Очистить</button>
+        </div>
+      </div>
+    </section>
+
+  </aside>
+
+  <main id="map"></main>
+</div>
+
+<!-- Оверлей при ошибке загрузки данных -->
+<div id="load-error" class="overlay hidden">
+  <div class="card overlay-card">
+    <h2 class="card-title">Данные не загрузились</h2>
+    <p class="card-text">
+      Если страница открыта как локальный файл (file://), браузер блокирует чтение CSV.
+      Запустите локальный сервер (<code>start_server.bat</code> или
+      <code>python -m http.server</code>) либо откройте карту с GitHub Pages.
+    </p>
+    <p class="card-text">Или загрузите CSV вручную:</p>
+    <label class="btn btn-accent file-btn">Выбрать CSV-файлы
+      <input type="file" id="manual-files" accept=".csv" multiple hidden>
+    </label>
+  </div>
+</div>
+
+<script src="js/app.js"></script>
+</body>
+</html>
