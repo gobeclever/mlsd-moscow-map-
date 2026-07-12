@@ -66,6 +66,9 @@
       <div id="filter-tree" class="filter-tree"></div>
     </section>
 
+    <!-- Кнопка перехода к дэшборду -->
+    <button id="btn-goto-dash" class="btn btn-accent btn-goto">Перейти к дэшборду ↓</button>
+
     <!-- Карточка: режим отображения -->
     <section class="card">
       <h2 class="card-title">Отображение</h2>
@@ -95,14 +98,53 @@
       </div>
     </section>
 
-    <!-- Карточка: границы -->
+    <!-- Карточка: административные границы -->
     <section class="card">
-      <h2 class="card-title">Административные границы</h2>
-      <label class="check-row"><input type="checkbox" id="layer-okruga"> <span>Округа Москвы</span></label>
-      <label class="check-row"><input type="checkbox" id="layer-rayony"> <span>Районы Москвы</span></label>
-      <label class="check-row"><input type="checkbox" id="layer-sadovoe"> <span>Садовое кольцо</span></label>
-      <label class="check-row"><input type="checkbox" id="layer-ttk"> <span>Третье транспортное (ТТК)</span></label>
-      <label class="check-row"><input type="checkbox" id="layer-mkad"> <span>МКАД</span></label>
+      <h2 class="card-title">Административные границы <span class="card-hint">верхний — поверх</span></h2>
+      <div id="admin-list" class="layer-list">
+        <div class="layer-row" data-key="moscow">
+          <span class="order-btns"><button class="ord-up" title="Выше">▲</button><button class="ord-down" title="Ниже">▼</button></span>
+          <label class="check-row"><input type="checkbox" id="layer-moscow"> <span>Граница Москвы</span></label>
+        </div>
+        <div class="layer-row" data-key="okruga">
+          <span class="order-btns"><button class="ord-up" title="Выше">▲</button><button class="ord-down" title="Ниже">▼</button></span>
+          <label class="check-row"><input type="checkbox" id="layer-okruga"> <span>Округа Москвы</span></label>
+        </div>
+        <div class="layer-row" data-key="rayony">
+          <span class="order-btns"><button class="ord-up" title="Выше">▲</button><button class="ord-down" title="Ниже">▼</button></span>
+          <label class="check-row"><input type="checkbox" id="layer-rayony"> <span>Районы Москвы</span></label>
+        </div>
+      </div>
+    </section>
+
+    <!-- Карточка: транспортные магистрали -->
+    <section class="card">
+      <h2 class="card-title">Транспортные магистрали <span class="card-hint">верхний — поверх</span></h2>
+      <div id="roads-list" class="layer-list">
+        <div class="layer-row" data-key="sadovoe">
+          <span class="order-btns"><button class="ord-up" title="Выше">▲</button><button class="ord-down" title="Ниже">▼</button></span>
+          <label class="check-row"><input type="checkbox" id="layer-sadovoe"> <span>Садовое кольцо</span></label>
+        </div>
+        <div class="layer-row" data-key="ttk">
+          <span class="order-btns"><button class="ord-up" title="Выше">▲</button><button class="ord-down" title="Ниже">▼</button></span>
+          <label class="check-row"><input type="checkbox" id="layer-ttk"> <span>Третье транспортное (ТТК)</span></label>
+        </div>
+        <div class="layer-row" data-key="mkad">
+          <span class="order-btns"><button class="ord-up" title="Выше">▲</button><button class="ord-down" title="Ниже">▼</button></span>
+          <label class="check-row"><input type="checkbox" id="layer-mkad"> <span>МКАД</span></label>
+        </div>
+      </div>
+    </section>
+
+    <!-- Карточка: пользовательские зоны (изохроны) -->
+    <section class="card">
+      <h2 class="card-title">Зоны доступности</h2>
+      <p class="card-text">Изохроны и произвольные полигоны: GeoJSON, JSON, GPKG.
+        Файлы из папки <code>data/zones</code> подхватываются автоматически.</p>
+      <label class="btn btn-accent file-btn">Загрузить зону
+        <input type="file" id="zone-files" accept=".geojson,.json,.gpkg" multiple hidden>
+      </label>
+      <div id="zones-list" class="zones-list layer-list"></div>
     </section>
 
     <!-- Карточка: подложка -->
@@ -143,6 +185,72 @@
   <main id="map"></main>
 </div>
 
+<!-- ================= ДЭШБОРД (Z-паттерн) ================= -->
+<section class="dashboard" id="dashboard">
+  <div class="dash-grid">
+
+    <!-- 1: KPI агрегата -->
+    <section class="card dash-cell">
+      <h2 class="card-title">Показатели агрегата</h2>
+      <div class="dash-kpi-grid">
+        <div class="stat-tile stat-blue"><span class="stat-value" id="dk-count">—</span><span class="stat-label">точек в агрегате</span></div>
+        <div class="stat-tile stat-green"><span class="stat-value" id="dk-share">—</span><span class="stat-label">от точек на карте</span></div>
+        <div class="stat-tile stat-blue"><span class="stat-value" id="dk-slides">—</span><span class="stat-label">слайдов</span></div>
+        <div class="stat-tile stat-green"><span class="stat-value" id="dk-cats">—</span><span class="stat-label">категорий</span></div>
+      </div>
+    </section>
+
+    <!-- 2: выбор структуры агрегации -->
+    <section class="card dash-cell">
+      <h2 class="card-title">Агрегация <span class="card-hint">по полигональной структуре</span></h2>
+      <div class="mode-grid" style="grid-template-columns:repeat(5,1fr)">
+        <button id="dsc-all" class="mode-btn active">Все точки</button>
+        <button id="dsc-moscow" class="mode-btn">Москва</button>
+        <button id="dsc-okruga" class="mode-btn">Округ</button>
+        <button id="dsc-rayony" class="mode-btn">Район</button>
+        <button id="dsc-zones" class="mode-btn">Зона</button>
+      </div>
+      <select id="dash-unit" class="dash-select hidden"></select>
+      <div id="dash-note" class="card-text" style="margin-top:8px"></div>
+    </section>
+
+    <!-- 3: структура по слайдам -->
+    <section class="card dash-cell">
+      <h2 class="card-title">Структура: слайды <span class="card-hint">клик — разбивка справа</span></h2>
+      <div id="dash-slides-stack" class="stack"></div>
+      <div id="dash-slides" class="bars"></div>
+    </section>
+
+    <!-- 4: разбивка слайда на категории -->
+    <section class="card dash-cell">
+      <h2 class="card-title">Категории: <span id="dash-cat-title" class="dash-cat-title">—</span></h2>
+      <div id="dash-cats-stack" class="stack"></div>
+      <div id="dash-cats" class="bars"></div>
+    </section>
+
+    <!-- 5: сравнение агрегатов одного уровня -->
+    <section class="card dash-cell dash-wide">
+      <h2 class="card-title">Сравнение агрегатов <span class="card-hint">полигоны одного уровня · Ctrl+клик — несколько</span></h2>
+      <div class="cmp-controls">
+        <div class="mode-switch cmp-level">
+          <button id="cmp-okruga" class="mode-btn active">Округа</button>
+          <button id="cmp-rayony" class="mode-btn">Районы</button>
+          <button id="cmp-zones" class="mode-btn">Зоны</button>
+        </div>
+        <select id="cmp-metric" class="dash-select cmp-metric"></select>
+      </div>
+      <div class="cmp-body">
+        <select id="cmp-units" multiple size="10" class="cmp-units"></select>
+        <div id="cmp-bars" class="bars cmp-bars"></div>
+      </div>
+      <div id="cmp-note" class="card-text" style="margin-top:8px"></div>
+    </section>
+
+  </div>
+
+  <button id="btn-goto-map" class="btn btn-accent btn-goto btn-goto-map">Вернуться к карте ↑</button>
+</section>
+
 <!-- Оверлей при ошибке загрузки данных -->
 <div id="load-error" class="overlay hidden">
   <div class="card overlay-card">
@@ -160,5 +268,7 @@
 </div>
 
 <script src="js/app.js"></script>
+<script src="js/zones.js"></script>
+<script src="js/dashboard.js"></script>
 </body>
 </html>

@@ -43,14 +43,16 @@ const CONFIG = {
   // Границы (GeoJSON, WGS84)
   okrugaFile: 'data/okruga.geojson',
   rayonyFile: 'data/rayony.geojson',
+  moscowFile: 'data/moscow.geojson',  // вся Москва (объединение округов)
   ringsFile:  'data/rings.geojson',   // Садовое кольцо, ТТК, МКАД
 
   // Поля атрибутивных таблиц округов/районов (индикативные показатели)
   adminFields: {
     nameCandidates: ['адм округ', 'мун округ', 'name:ru', 'name'],
     shortName: 'адм округ кратко',
-    area: 'area km2',               // площадь, км²
-    pop:  'Насел пост (скоррект)'   // оценка населения, чел.
+    area: 'area km2',                   // площадь, км²
+    pop:  'Насел пост (скоррект)',      // оценка населения, чел.
+    housing: 'Жилпл 2025 (скоррект)'    // жилая площадь, кв.м
   },
 
   // Акцентная палитра проекта
@@ -69,9 +71,14 @@ const CONFIG = {
     '#6C8F7C', '#8E5C91', '#C2894E', '#587DA8', '#9C6F5A', '#69797E'
   ],
 
-  // Шкала насыщенности для гексагонов и картодиаграмм
-  // (от малого количества к большому: холодный → красный)
-  scaleColors: ['#365D7E', '#44ACAA', '#F0B398', '#F67380', '#C06D84'],
+  // Шкала насыщенности для гексагонов и картодиаграмм —
+  // последовательная палитра CARTO «DarkMint» (плавный переток).
+  // Другие палитры с carto.com/carto-colors (заменить массив целиком):
+  //   Mint:   ['#e4f1e1','#b4d9cc','#89c0b6','#63a6a0','#337f7f']
+  //   Teal:   ['#d1eeea','#a8dbd9','#85c4c9','#68abb8','#3b738f']
+  //   BluYl:  ['#f7feae','#b7e6a5','#7ccba2','#46aea0','#089099']
+  //   Sunset: ['#f3e79b','#fac484','#f8a07e','#eb7f86','#ce6693']
+  scaleColors: ['#d2fbd4', '#a5dbc2', '#7bbcb0', '#559c9e', '#235d72'],
 
   mapCenter: [55.751, 37.618],
   mapZoom: 10
@@ -329,10 +336,16 @@ function buildFilterUI() {
     head.innerHTML = `
       <button class="ft-toggle" title="Развернуть">▶</button>
       <input type="checkbox" checked data-g1="${escAttr(g1)}">
-      <span class="ft-color" style="background:${color}"></span>
+      <input type="color" class="ft-color-input" value="${color}" title="Цвет слайда">
       <span class="ft-name">${escHtml(g1)}</span>
       <span class="ft-count">${sumMap(subs).toLocaleString('ru-RU')}</span>`;
     grp.appendChild(head);
+
+    // смена цвета слайда: перекрашиваются точки, кластеры-диаграммы и дэшборд
+    head.querySelector('.ft-color-input').addEventListener('change', (e) => {
+      state.colors.set(g1, e.target.value);
+      refreshMap();
+    });
 
     const children = document.createElement('div');
     children.className = 'ft-children hidden';
@@ -431,6 +444,8 @@ function refreshMap() {
     case 'rayony':   renderChoropleth('rayony', pts); break;
   }
   if (state.selection) updateSelection(); // пересчёт зоны при смене фильтра
+  if (typeof applyOverlayOrder === 'function') applyOverlayOrder();
+  if (window.updateDashboard) window.updateDashboard();
 }
 
 const MODES = ['points', 'clusters', 'pie', 'hex', 'okruga', 'rayony'];
@@ -463,8 +478,7 @@ INDICATORS.forEach(ind =>
 function makeMarker(p) {
   const m = L.circleMarker([p.lat, p.lon], {
     radius: 4.5,
-    weight: 1.25,
-    color: '#ffffff',
+    stroke: false,
     fillColor: state.colors.get(p.g1) || CONFIG.accent.blue,
     fillOpacity: 0.92,
     g1: p.g1
@@ -658,6 +672,13 @@ function showLegend(cls, title) {
     const d = document.createElement('div');
     d.className = 'hl-item';
     d.style.background = cls.colors[i];
+    // тёмный текст на светлых плашках, белый — на тёмных
+    const c = cls.colors[i].replace('#', '');
+    const lum = 0.299 * parseInt(c.slice(0, 2), 16)
+      + 0.587 * parseInt(c.slice(2, 4), 16)
+      + 0.114 * parseInt(c.slice(4, 6), 16);
+    d.style.color = lum > 150 ? '#1e1e1e' : '#ffffff';
+    d.style.textShadow = 'none';
     d.textContent = prev === null ? `≤${fmtVal(t)}` : `${fmtVal(prev)}–${fmtVal(t)}`;
     d.title = d.textContent;
     el.appendChild(d);
@@ -673,11 +694,12 @@ function hideLegend() {
 /* ------------------------------------------------------------
    ГРАНИЦЫ: ЗАГРУЗКА И ГЕОМЕТРИЯ
    ------------------------------------------------------------ */
-const adminData = { okruga: null, rayony: null }; // {gj, feats:[{f, name, polys}]}
+const adminData = { okruga: null, rayony: null, moscow: null }; // {gj, feats:[{f, name, polys}]}
 
 async function getAdminData(kind) {
   if (adminData[kind]) return adminData[kind];
-  const url = kind === 'okruga' ? CONFIG.okrugaFile : CONFIG.rayonyFile;
+  const url = kind === 'okruga' ? CONFIG.okrugaFile
+    : kind === 'rayony' ? CONFIG.rayonyFile : CONFIG.moscowFile;
   const gj = await (await fetch(url)).json();
   const AF = CONFIG.adminFields;
   const feats = gj.features.map(f => {
@@ -686,8 +708,9 @@ async function getAdminData(kind) {
     for (const c of AF.nameCandidates) if (p[c]) { name = p[c]; break; }
     return {
       f, name,
-      area: parseFloat(p[AF.area]) || 0,   // км²
-      pop:  parseFloat(p[AF.pop])  || 0,   // чел.
+      area: parseFloat(p[AF.area]) || 0,        // км²
+      pop:  parseFloat(p[AF.pop])  || 0,        // чел.
+      housing: parseFloat(p[AF.housing]) || 0,  // кв.м
       polys: prepGeometry(f.geometry)
     };
   });
@@ -732,7 +755,8 @@ function fmtVal(x) {
   if (!isFinite(x)) return '—';
   const opts = x >= 100 ? { maximumFractionDigits: 0 }
     : x >= 10 ? { maximumFractionDigits: 1 }
-    : { maximumFractionDigits: 2 };
+    : x >= 0.1 ? { maximumFractionDigits: 2 }
+    : { maximumSignificantDigits: 2 }; // очень малые плотности (на кв.м жилья)
   return x.toLocaleString('ru-RU', opts);
 }
 
@@ -833,12 +857,13 @@ async function renderChoropleth(kind, pts) {
   ).addTo(map);
 
   showLegend(cls, INDICATOR_TITLES[state.indicator][kind]);
+  applyOverlayOrder(); // оверлеи (границы, кольца, зоны) — поверх картодиаграммы
 }
 
 /* ------------------------------------------------------------
    ОВЕРЛЕИ ГРАНИЦ (контуры поверх любого режима)
    ------------------------------------------------------------ */
-const adminOverlays = { okruga: null, rayony: null };
+const adminOverlays = { okruga: null, rayony: null, moscow: null };
 
 async function toggleAdminOverlay(kind, on, color, dash) {
   if (on) {
@@ -860,12 +885,14 @@ async function toggleAdminOverlay(kind, on, color, dash) {
       });
     }
     adminOverlays[kind].addTo(map);
-    adminOverlays[kind].bringToBack();
   } else if (adminOverlays[kind]) {
     map.removeLayer(adminOverlays[kind]);
   }
+  applyOverlayOrder();
 }
 
+document.getElementById('layer-moscow').addEventListener('change', (e) =>
+  toggleAdminOverlay('moscow', e.target.checked, CONFIG.accent.blue, null));
 document.getElementById('layer-okruga').addEventListener('change', (e) =>
   toggleAdminOverlay('okruga', e.target.checked, CONFIG.accent.plum, null));
 document.getElementById('layer-rayony').addEventListener('change', (e) =>
@@ -899,11 +926,61 @@ async function toggleRing(key, on) {
   } else if (ringLayers[key]) {
     map.removeLayer(ringLayers[key]);
   }
+  applyOverlayOrder();
 }
 
 document.getElementById('layer-sadovoe').addEventListener('change', (e) => toggleRing('Садовое кольцо', e.target.checked));
 document.getElementById('layer-ttk').addEventListener('change', (e) => toggleRing('ТТК', e.target.checked));
 document.getElementById('layer-mkad').addEventListener('change', (e) => toggleRing('МКАД', e.target.checked));
+
+/* ------------------------------------------------------------
+   ПОРЯДОК НАЛОЖЕНИЯ ОВЕРЛЕЕВ
+   Верхняя строка в списке = верхний слой на карте.
+   Блоки (сверху вниз): зоны доступности → магистрали → границы.
+   ------------------------------------------------------------ */
+const overlayRegistry = {
+  moscow:  () => adminOverlays.moscow && map.hasLayer(adminOverlays.moscow) ? adminOverlays.moscow : null,
+  okruga:  () => adminOverlays.okruga && map.hasLayer(adminOverlays.okruga) ? adminOverlays.okruga : null,
+  rayony:  () => adminOverlays.rayony && map.hasLayer(adminOverlays.rayony) ? adminOverlays.rayony : null,
+  sadovoe: () => ringLayers['Садовое кольцо'] && map.hasLayer(ringLayers['Садовое кольцо']) ? ringLayers['Садовое кольцо'] : null,
+  ttk:     () => ringLayers['ТТК'] && map.hasLayer(ringLayers['ТТК']) ? ringLayers['ТТК'] : null,
+  mkad:    () => ringLayers['МКАД'] && map.hasLayer(ringLayers['МКАД']) ? ringLayers['МКАД'] : null
+};
+
+function applyOverlayOrder() {
+  const rows = [
+    ...document.querySelectorAll('#zones-list [data-zone-id]'),
+    ...document.querySelectorAll('#roads-list .layer-row'),
+    ...document.querySelectorAll('#admin-list .layer-row')
+  ];
+  const layers = [];
+  for (const r of rows) {
+    let ly = null;
+    if (r.dataset.key) ly = overlayRegistry[r.dataset.key]?.();
+    else if (r.dataset.zoneId && window.zoneLayerById) ly = window.zoneLayerById(r.dataset.zoneId);
+    if (ly) layers.push(ly);
+  }
+  // снизу вверх: последний вызов bringToFront оказывается верхним
+  for (let i = layers.length - 1; i >= 0; i--) layers[i].bringToFront();
+}
+window.applyOverlayOrder = applyOverlayOrder;
+
+function moveRow(row, dir) {
+  if (!row) return;
+  const sib = dir < 0 ? row.previousElementSibling : row.nextElementSibling;
+  if (!sib) return;
+  if (dir < 0) row.parentNode.insertBefore(row, sib);
+  else row.parentNode.insertBefore(sib, row);
+  applyOverlayOrder();
+}
+
+document.querySelectorAll('.layer-list').forEach(list =>
+  list.addEventListener('click', (e) => {
+    const up = e.target.closest('.ord-up');
+    const down = e.target.closest('.ord-down');
+    if (!up && !down) return;
+    moveRow(e.target.closest('.layer-row, .zone-row'), up ? -1 : 1);
+  }));
 
 /* ------------------------------------------------------------
    РИСОВАНИЕ ЗОНЫ И ВЫГРУЗКА
@@ -1030,6 +1107,12 @@ document.getElementById('btn-sidebar').addEventListener('click', () => {
   document.getElementById('sidebar').classList.toggle('collapsed');
   setTimeout(() => map.invalidateSize(), 260);
 });
+
+document.getElementById('btn-goto-dash').addEventListener('click', () =>
+  document.getElementById('dashboard').scrollIntoView({ behavior: 'smooth' }));
+
+document.getElementById('btn-goto-map').addEventListener('click', () =>
+  window.scrollTo({ top: 0, behavior: 'smooth' }));
 
 /* ------------------------------------------------------------
    УТИЛИТЫ

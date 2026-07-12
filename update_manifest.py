@@ -1,29 +1,35 @@
 # -*- coding: utf-8 -*-
 """
-Синхронизация папки данных MLSD_moscow_data с картой.
+Синхронизация папок данных с картой.
 
-Сканирует папку MLSD_moscow_data, находит все .csv
-и записывает их список в MLSD_moscow_data/manifest.json.
-Карта при загрузке читает manifest.json и подхватывает все файлы.
+1. MLSD_moscow_data:  все .csv -> MLSD_moscow_data/manifest.json
+2. data/zones:        все .geojson/.json/.gpkg -> data/zones/manifest.json
 
+Карта при загрузке читает манифесты и подхватывает файлы.
 Запуск:  python update_manifest.py   (или двойной клик по update_manifest.bat)
 """
 import json
 from pathlib import Path
 
-DATA_DIR = Path(__file__).parent / "MLSD_moscow_data"
-MANIFEST = DATA_DIR / "manifest.json"
+ROOT = Path(__file__).parent
 
-def main():
-    DATA_DIR.mkdir(exist_ok=True)
-    files = sorted(p.name for p in DATA_DIR.glob("*.csv"))
-    MANIFEST.write_text(
+def write_manifest(folder: Path, patterns: list[str], label: str):
+    folder.mkdir(parents=True, exist_ok=True)
+    files = sorted(
+        p.name for p in folder.iterdir()
+        if p.is_file() and p.suffix.lower() in patterns
+    )
+    (folder / "manifest.json").write_text(
         json.dumps({"files": files}, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    print(f"manifest.json обновлён: {len(files)} файл(ов)")
+    print(f"{label}: {len(files)} файл(ов)")
     for f in files:
         print("  -", f)
+
+def main():
+    write_manifest(ROOT / "MLSD_moscow_data", [".csv"], "MLSD_moscow_data/manifest.json")
+    write_manifest(ROOT / "data" / "zones", [".geojson", ".json", ".gpkg"], "data/zones/manifest.json")
 
 if __name__ == "__main__":
     main()
