@@ -17,7 +17,7 @@ def write_manifest(folder: Path, patterns: list[str], label: str):
     folder.mkdir(parents=True, exist_ok=True)
     files = sorted(
         p.name for p in folder.iterdir()
-        if p.is_file() and p.suffix.lower() in patterns
+        if p.is_file() and p.suffix.lower() in patterns and p.name != "manifest.json"
     )
     (folder / "manifest.json").write_text(
         json.dumps({"files": files}, ensure_ascii=False, indent=2),

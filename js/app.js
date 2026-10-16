@@ -20,9 +20,23 @@ const CONFIG = {
   fieldLat: 'Широта',
   fieldLon: 'Долгота',
 
-  // Двухуровневая агрегация: группа 1 (слайд) → группа 2 (категория)
-  fieldGroup1: 'Главная рубрика',
-  fieldGroup2: 'Специализация сети',
+  // Двухуровневая агрегация: слайд → категория.
+  // Категория = рубрика 2GIS, по которой шёл запрос: берётся из колонки
+  // «Ссылка запроса» (…/search/<название>/rubricId/<id>/…), а если её нет —
+  // из имени файла (city_[район_]<название>_<id>.csv).
+  fieldQuery: 'Ссылка запроса',
+  // Слайды: название → список rubricId. Рубрики, не попавшие ни в один
+  // слайд, уходят в unassignedSlide.
+  slides: {
+    'Продуктовый ритейл': ['373', '350', '112614'],
+    'Алкоголь и табак':   ['360', '367']
+  },
+  unassignedSlide: 'Без слайда',
+
+  // Дубли внутри одной категории убираются по этому полю
+  // (ID объекта не годится: Excel портит 17-значные ID при сохранении).
+  fieldDedup: '2GIS URL',
+  fieldExpected: 'Ожидаемое кол-во (2GIS)',
 
   // Поля, показываемые в тултипе при наведении (в этом порядке).
   // Контакты и время работы не показываем.
@@ -254,19 +268,50 @@ function parseCsvFile(file) {
   });
 }
 
+// rubricId → слайд
+const SLIDE_BY_RUBRIC = new Map(Object.entries(CONFIG.slides)
+  .flatMap(([slide, ids]) => ids.map(id => [String(id), slide])));
+
+// Категория (рубрика запроса) из «Ссылки запроса» или имени файла
+function categoryOf(row, sourceName) {
+  const q = String(row[CONFIG.fieldQuery] || '');
+  const m = q.match(/\/search\/([^/]+)\/rubricId\/(\d+)/);
+  if (m) {
+    let label = m[1];
+    try { label = decodeURIComponent(label); } catch (e) { /* уже раскодировано */ }
+    return { id: m[2], label };
+  }
+  const f = sourceName.replace(/\.csv$/i, '').match(/^[^_]+_(.+)_(\d+)$/);
+  if (f) return { id: f[2], label: f[1].replace(/_/g, ' ') };
+  return { id: '', label: CONFIG.emptyLabel };
+}
+
+const seenKeys = new Set();  // категория + ключ дедупликации
+
 function addRows(rows, sourceName) {
   let added = 0;
+  const expected = new Map();  // ссылка запроса → «Найдено N» по данным 2GIS
   for (const row of rows) {
     const lat = parseFloat(String(row[CONFIG.fieldLat] ?? '').replace(',', '.'));
     const lon = parseFloat(String(row[CONFIG.fieldLon] ?? '').replace(',', '.'));
     if (!isFinite(lat) || !isFinite(lon)) continue;
-    const g1 = (row[CONFIG.fieldGroup1] || '').trim() || CONFIG.emptyLabel;
-    const g2 = (row[CONFIG.fieldGroup2] || '').trim() || CONFIG.emptyLabel;
+
+    const exp = parseInt(row[CONFIG.fieldExpected], 10);
+    if (isFinite(exp)) expected.set(row[CONFIG.fieldQuery] || sourceName, exp);
+
+    const cat = categoryOf(row, sourceName);
+    const key = cat.id + SEP + (row[CONFIG.fieldDedup] || `${lat},${lon},${row[CONFIG.fieldName]}`);
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
+
+    const g1 = SLIDE_BY_RUBRIC.get(cat.id) || CONFIG.unassignedSlide;
+    const g2 = cat.label;
     state.points.push({ row, lat, lon, g1, g2 });
     added++;
     for (const h of Object.keys(row)) if (!state.headers.includes(h)) state.headers.push(h);
   }
-  state.filesLoaded.push({ name: sourceName, count: added });
+  const exp = [...expected.values()].reduce((a, b) => a + b, 0);
+  state.filesLoaded.push({ name: sourceName, rows: rows.length, count: added, expected: exp || null });
 }
 
 function finishLoading() {
@@ -506,7 +551,8 @@ function renderClusters(pts, group) {
 
 function buildTooltip(p) {
   const name = p.row[CONFIG.fieldName] || CONFIG.emptyLabel;
-  let html = `<div class="tt-name">${escHtml(name)}</div>`;
+  let html = `<div class="tt-name">${escHtml(name)}</div>` +
+    `<div class="tt-row"><span>Слайд / категория</span><b>${escHtml(p.g1)} / ${escHtml(p.g2)}</b></div>`;
   for (const f of CONFIG.tooltipFields) {
     const v = (p.row[f] || '').toString().trim();
     if (!v) continue;
@@ -1098,8 +1144,15 @@ function updateStats(visible) {
 
 function renderFileList() {
   const el = document.getElementById('data-files');
+  const n = (x) => x.toLocaleString('ru-RU');
+  // уникальных точек / строк в файле / сколько обещает 2GIS («Найдено N»)
   el.innerHTML = state.filesLoaded
-    .map(f => `<div>📄 ${escHtml(f.name)} — ${f.count.toLocaleString('ru-RU')}</div>`)
+    .map(f => {
+      let s = `<div>📄 ${escHtml(f.name)} — ${n(f.count)} уник.`;
+      if (f.rows !== f.count) s += ` из ${n(f.rows)} строк`;
+      if (f.expected) s += ` · 2GIS: ${n(f.expected)} (${Math.round(f.count / f.expected * 100)}%)`;
+      return s + '</div>';
+    })
     .join('');
 }
 
