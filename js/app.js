@@ -58,6 +58,7 @@ const CONFIG = {
   okrugaFile: 'data/okruga.geojson',
   rayonyFile: 'data/rayony.geojson',
   moscowFile: 'data/moscow.geojson',  // вся Москва (объединение округов)
+  clipToMoscow: true,                 // отбрасывать точки за границей Москвы (выдача 2GIS захватывает область)
   ringsFile:  'data/rings.geojson',   // Садовое кольцо, ТТК, МКАД
 
   // Поля атрибутивных таблиц округов/районов (индикативные показатели)
@@ -232,6 +233,7 @@ async function loadData() {
     return;
   }
 
+  await loadClip();
   for (const f of files) {
     try {
       const rows = await parseCsvUrl(CONFIG.dataDir + encodeURIComponent(f));
@@ -287,9 +289,19 @@ function categoryOf(row, sourceName) {
 }
 
 const seenKeys = new Set();  // категория + ключ дедупликации
+let clipPolys = null;        // полигоны границы Москвы (null — без отсечения)
+
+async function loadClip() {
+  if (!CONFIG.clipToMoscow || clipPolys) return;
+  try {
+    clipPolys = (await getAdminData('moscow')).feats.flatMap(f => f.polys);
+  } catch (e) {
+    console.warn('Граница Москвы не загрузилась — точки не отсекаются', e);
+  }
+}
 
 function addRows(rows, sourceName) {
-  let added = 0;
+  let added = 0, outside = 0;
   const expected = new Map();  // ссылка запроса → «Найдено N» по данным 2GIS
   for (const row of rows) {
     const lat = parseFloat(String(row[CONFIG.fieldLat] ?? '').replace(',', '.'));
@@ -303,6 +315,7 @@ function addRows(rows, sourceName) {
     const key = cat.id + SEP + (row[CONFIG.fieldDedup] || `${lat},${lon},${row[CONFIG.fieldName]}`);
     if (seenKeys.has(key)) continue;
     seenKeys.add(key);
+    if (clipPolys && !ptInFeature(lon, lat, clipPolys)) { outside++; continue; }
 
     const g1 = SLIDE_BY_RUBRIC.get(cat.id) || CONFIG.unassignedSlide;
     const g2 = cat.label;
@@ -311,7 +324,7 @@ function addRows(rows, sourceName) {
     for (const h of Object.keys(row)) if (!state.headers.includes(h)) state.headers.push(h);
   }
   const exp = [...expected.values()].reduce((a, b) => a + b, 0);
-  state.filesLoaded.push({ name: sourceName, rows: rows.length, count: added, expected: exp || null });
+  state.filesLoaded.push({ name: sourceName, rows: rows.length, count: added, outside, expected: exp || null });
 }
 
 function finishLoading() {
@@ -329,6 +342,7 @@ function showLoadError() {
 }
 
 document.getElementById('manual-files').addEventListener('change', async (e) => {
+  await loadClip();
   for (const f of e.target.files) {
     const rows = await parseCsvFile(f);
     addRows(rows, f.name);
@@ -1145,12 +1159,16 @@ function updateStats(visible) {
 function renderFileList() {
   const el = document.getElementById('data-files');
   const n = (x) => x.toLocaleString('ru-RU');
-  // уникальных точек / строк в файле / сколько обещает 2GIS («Найдено N»)
+  // точек на карте (в Москве) / всего уникальных / строк в файле /
+  // сколько обещает 2GIS («Найдено N» — считается по всей выдаче, вместе с областью,
+  // поэтому процент полноты берётся от всех уникальных, а не только московских)
   el.innerHTML = state.filesLoaded
     .map(f => {
-      let s = `<div>📄 ${escHtml(f.name)} — ${n(f.count)} уник.`;
-      if (f.rows !== f.count) s += ` из ${n(f.rows)} строк`;
-      if (f.expected) s += ` · 2GIS: ${n(f.expected)} (${Math.round(f.count / f.expected * 100)}%)`;
+      const uniq = f.count + f.outside;
+      let s = `<div>📄 ${escHtml(f.name)} — ${n(f.count)}`;
+      s += f.outside ? ` в Москве · всего ${n(uniq)} уник.` : ' уник.';
+      if (f.rows !== uniq) s += ` из ${n(f.rows)} строк`;
+      if (f.expected) s += ` · 2GIS: ${n(f.expected)} (${Math.round(uniq / f.expected * 100)}%)`;
       return s + '</div>';
     })
     .join('');
