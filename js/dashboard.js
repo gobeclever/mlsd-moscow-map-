@@ -17,9 +17,8 @@
   const el = (id) => document.getElementById(id);
 
   const dash = {
-    scope: 'all',        // all | moscow | okruga | rayony | zones
-    unitOkr: null,
-    unitRay: null,
+    scope: 'all',        // all | moscow | okruga | rayony | mix | zones
+    units: {},           // выбранная единица для каждого уровня
     unitZone: null,
     slide: null,         // выбранный слайд (группа 1)
     lastPts: [],
@@ -28,7 +27,8 @@
 
   /* ---------------- выбор структуры агрегации ---------------- */
 
-  const SCOPES = ['all', 'moscow', 'okruga', 'rayony', 'zones'];
+  const SCOPES = ['all', 'moscow', 'okruga', 'rayony', 'mix', 'zones'];
+  const ADMIN_SCOPES = ['okruga', 'rayony', 'mix'];
   SCOPES.forEach(s =>
     el('dsc-' + s).addEventListener('click', () => {
       dash.scope = s;
@@ -37,8 +37,7 @@
     }));
 
   el('dash-unit').addEventListener('change', (e) => {
-    if (dash.scope === 'okruga') dash.unitOkr = e.target.value;
-    else if (dash.scope === 'rayony') dash.unitRay = e.target.value;
+    if (ADMIN_SCOPES.includes(dash.scope)) dash.units[dash.scope] = e.target.value;
     else if (dash.scope === 'zones') dash.unitZone = e.target.value;
     updateDashboard();
   });
@@ -87,12 +86,12 @@
         const prep = await getMoscowPrep();
         pts = all.filter(p => ptInFeature(p.lon, p.lat, prep));
 
-      } else if (dash.scope === 'okruga' || dash.scope === 'rayony') {
+      } else if (ADMIN_SCOPES.includes(dash.scope)) {
         const data = await getAdminData(dash.scope);
         const names = data.feats.map(f => f.name).sort((a, b) => a.localeCompare(b, 'ru'));
-        let cur = dash.scope === 'okruga' ? dash.unitOkr : dash.unitRay;
+        let cur = dash.units[dash.scope];
         if (!names.includes(cur)) cur = names[0];
-        if (dash.scope === 'okruga') dash.unitOkr = cur; else dash.unitRay = cur;
+        dash.units[dash.scope] = cur;
         unitOptions = names.map(n => ({ value: n, label: n }));
         unitValue = cur;
         const feat = data.feats.find(f => f.name === cur);
@@ -252,7 +251,7 @@
   ];
   const CMP_METRICS_ZONES = [['points', 'Точек (по фильтрам)']];
 
-  const CMP_LEVELS = ['okruga', 'rayony', 'zones'];
+  const CMP_LEVELS = ['okruga', 'rayony', 'mix', 'zones'];
   CMP_LEVELS.forEach(l =>
     el('cmp-' + l).addEventListener('click', () => {
       cmp.level = l;

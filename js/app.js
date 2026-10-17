@@ -1,9 +1,10 @@
 /* ============================================================
    MLSD Web Map — основной модуль
    Режимы: точки, кластеры, круговые диаграммы, гексагоны,
-   агрегация по округам и районам (картодиаграмма).
-   Фильтры, тултипы, попапы границ, рисование зоны,
-   выгрузка CSV / XLSX / GeoJSON, подложки Positron/Dark/OSM.
+   агрегация по округам, районам и «районы + ТиНАО» (картодиаграмма).
+   Фильтры по категориям и территориям, тултипы, попапы границ,
+   рисование зоны, выгрузка CSV / XLSX / GeoJSON,
+   подложки OSM / спутник / белый лист.
    ============================================================ */
 
 'use strict';
@@ -58,13 +59,14 @@ const CONFIG = {
   // Границы (GeoJSON, WGS84)
   okrugaFile: 'data/okruga.geojson',
   rayonyFile: 'data/rayony.geojson',
+  mixFile:    'data/Moscow_mix.geojson', // районы старой Москвы + НАО и ТАО целиком
   moscowFile: 'data/moscow.geojson',  // вся Москва (объединение округов)
   clipToMoscow: true,                 // отбрасывать точки за границей Москвы (выдача 2GIS захватывает область)
   ringsFile:  'data/rings.geojson',   // Садовое кольцо, ТТК, МКАД
 
   // Поля атрибутивных таблиц округов/районов (индикативные показатели)
   adminFields: {
-    nameCandidates: ['адм округ', 'мун округ', 'name:ru', 'name'],
+    nameCandidates: ['адм округ', 'мун округ', 'Name', 'name:ru', 'name'],
     shortName: 'адм округ кратко',
     area: 'area km2',                   // площадь, км²
     pop:  'Насел пост (скоррект)',      // оценка населения, чел.
@@ -109,7 +111,7 @@ const state = {
   activeKeys: new Set(), // активные пары "g1␟g2"
   tree: new Map(),       // g1 -> Map(g2 -> count)
   colors: new Map(),     // g1 -> цвет
-  mode: 'clusters',      // points | clusters | pie | hex | okruga | rayony
+  mode: 'clusters',      // points | clusters | pie | hex | okruga | rayony | mix
   indicator: 'abs',      // знаменатель картосхемы: abs | area | pop
   hexSizeHa: 10,
   selection: null,       // точки в нарисованной зоне
@@ -127,34 +129,32 @@ L.control.zoom({ position: 'topright' }).addTo(map);
 L.control.scale({ imperial: false, position: 'bottomright' }).addTo(map);
 
 const basemaps = {
-  positron: L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-    attribution: '© OpenStreetMap, © CARTO', maxZoom: 20
-  }),
-  // Positron с CSS-фильтром: более серая, приглушённая версия
-  gray: L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-    attribution: '© OpenStreetMap, © CARTO', maxZoom: 20, className: 'gray-tiles'
-  }),
-  dark: L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-    attribution: '© OpenStreetMap, © CARTO', maxZoom: 20
-  }),
   osm: L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '© OpenStreetMap contributors', maxZoom: 19
-  })
+  }),
+  // спутниковые снимки Esri World Imagery (без ключа)
+  satellite: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+    attribution: 'Tiles © Esri — Source: Esri, Maxar, Earthstar Geographics', maxZoom: 19
+  }),
+  blank: null  // белый лист: без тайлов, только данные и границы
 };
-basemaps.positron.addTo(map);
+basemaps.osm.addTo(map);
 
-const BASEMAPS = ['positron', 'gray', 'dark', 'osm'];
+const BASEMAPS = Object.keys(basemaps);
 BASEMAPS.forEach(k =>
   document.getElementById('base-' + k).addEventListener('click', () => setBasemap(k)));
 
 function setBasemap(name) {
   Object.entries(basemaps).forEach(([k, layer]) => {
+    if (!layer) return;
     if (k === name) { if (!map.hasLayer(layer)) layer.addTo(map); layer.bringToBack(); }
     else map.removeLayer(layer);
   });
   BASEMAPS.forEach(k =>
     document.getElementById('base-' + k).classList.toggle('active', k === name));
-  document.getElementById('map').classList.toggle('dark-base', name === 'dark');
+  const el = document.getElementById('map');
+  el.classList.toggle('dark-base', name === 'satellite');
+  el.classList.toggle('blank-base', name === 'blank');
 }
 
 /* ------------------------------------------------------------
@@ -333,6 +333,7 @@ function finishLoading() {
   buildFilterUI();
   refreshMap();
   renderFileList();
+  buildTerritory();
   const b = L.latLngBounds(state.points.map(p => [p.lat, p.lon]));
   if (b.isValid()) map.fitBounds(b.pad(0.05));
 }
@@ -476,7 +477,7 @@ function setAllFilters(on) {
 }
 
 const filteredPoints = () =>
-  state.points.filter(p => state.activeKeys.has(p.g1 + SEP + p.g2));
+  state.points.filter(p => state.activeKeys.has(p.g1 + SEP + p.g2) && !terrExcluded(p));
 
 /* ------------------------------------------------------------
    ДИСПЕТЧЕР РЕЖИМОВ ОТОБРАЖЕНИЯ
@@ -502,13 +503,16 @@ function refreshMap() {
     case 'hex':      renderHexes(pts); break;
     case 'okruga':   renderChoropleth('okruga', pts); break;
     case 'rayony':   renderChoropleth('rayony', pts); break;
+    case 'mix':      renderChoropleth('mix', pts); break;
   }
+  updateTerritoryCounts();
   if (state.selection) updateSelection(); // пересчёт зоны при смене фильтра
   if (typeof applyOverlayOrder === 'function') applyOverlayOrder();
   if (window.updateDashboard) window.updateDashboard();
 }
 
-const MODES = ['points', 'clusters', 'pie', 'hex', 'okruga', 'rayony'];
+const MODES = ['points', 'clusters', 'pie', 'hex', 'okruga', 'rayony', 'mix'];
+const AGG_MODES = ['okruga', 'rayony', 'mix']; // картодиаграммы по границам
 MODES.forEach(m =>
   document.getElementById('mode-' + m).addEventListener('click', () => setMode(m)));
 
@@ -518,7 +522,7 @@ function setMode(mode) {
     document.getElementById('mode-' + m).classList.toggle('active', m === mode));
   document.getElementById('hex-controls').classList.toggle('hidden', mode !== 'hex');
   document.getElementById('indicator-controls').classList.toggle(
-    'hidden', mode !== 'okruga' && mode !== 'rayony');
+    'hidden', !AGG_MODES.includes(mode));
   refreshMap();
 }
 
@@ -529,7 +533,7 @@ INDICATORS.forEach(ind =>
     state.indicator = ind;
     INDICATORS.forEach(i =>
       document.getElementById('ind-' + i).classList.toggle('active', i === ind));
-    if (state.mode === 'okruga' || state.mode === 'rayony') refreshMap();
+    if (AGG_MODES.includes(state.mode)) refreshMap();
   }));
 
 /* ------------------------------------------------------------
@@ -755,13 +759,15 @@ function hideLegend() {
 /* ------------------------------------------------------------
    ГРАНИЦЫ: ЗАГРУЗКА И ГЕОМЕТРИЯ
    ------------------------------------------------------------ */
-const adminData = { okruga: null, rayony: null, moscow: null }; // {gj, feats:[{f, name, polys}]}
+const adminData = { okruga: null, rayony: null, mix: null, moscow: null }; // {gj, feats:[{f, name, polys}]}
+const ADMIN_FILES = {
+  okruga: CONFIG.okrugaFile, rayony: CONFIG.rayonyFile,
+  mix: CONFIG.mixFile, moscow: CONFIG.moscowFile
+};
 
 async function getAdminData(kind) {
   if (adminData[kind]) return adminData[kind];
-  const url = kind === 'okruga' ? CONFIG.okrugaFile
-    : kind === 'rayony' ? CONFIG.rayonyFile : CONFIG.moscowFile;
-  const gj = await (await fetch(url)).json();
+  const gj = await (await fetch(ADMIN_FILES[kind])).json();
   const AF = CONFIG.adminFields;
   const feats = gj.features.map(f => {
     const p = f.properties;
@@ -831,9 +837,9 @@ function indicatorValue(feat, n) {
 }
 
 const INDICATOR_TITLES = {
-  abs:  { okruga: 'объектов в округе', rayony: 'объектов в районе' },
-  area: { okruga: 'объектов на 1 км²', rayony: 'объектов на 1 км²' },
-  pop:  { okruga: 'на 100 тыс. жителей', rayony: 'на 100 тыс. жителей' }
+  abs:  { okruga: 'объектов в округе', rayony: 'объектов в районе', mix: 'объектов в районе / округе ТиНАО' },
+  area: { okruga: 'объектов на 1 км²', rayony: 'объектов на 1 км²', mix: 'объектов на 1 км²' },
+  pop:  { okruga: 'на 100 тыс. жителей', rayony: 'на 100 тыс. жителей', mix: 'на 100 тыс. жителей' }
 };
 
 /* Попап в стиле карточки (как на референсе) */
@@ -924,7 +930,7 @@ async function renderChoropleth(kind, pts) {
 /* ------------------------------------------------------------
    ОВЕРЛЕИ ГРАНИЦ (контуры поверх любого режима)
    ------------------------------------------------------------ */
-const adminOverlays = { okruga: null, rayony: null, moscow: null };
+const adminOverlays = { okruga: null, rayony: null, mix: null, moscow: null };
 
 async function toggleAdminOverlay(kind, on, color, dash) {
   if (on) {
@@ -958,6 +964,85 @@ document.getElementById('layer-okruga').addEventListener('change', (e) =>
   toggleAdminOverlay('okruga', e.target.checked, CONFIG.accent.plum, null));
 document.getElementById('layer-rayony').addEventListener('change', (e) =>
   toggleAdminOverlay('rayony', e.target.checked, CONFIG.accent.teal, '4 4'));
+document.getElementById('layer-mix').addEventListener('change', (e) =>
+  toggleAdminOverlay('mix', e.target.checked, CONFIG.accent.coral, '6 3'));
+
+/* ------------------------------------------------------------
+   ФИЛЬТР ПО ТЕРРИТОРИЯМ
+   Выключенные округа / районы убирают свои точки из карты и
+   дэшборда (через filteredPoints). Принадлежность точки к единице
+   считается один раз на уровень и хранится в p.terr[level];
+   точки вне всех полигонов уровня фильтром не затрагиваются.
+   ------------------------------------------------------------ */
+const terr = { level: 'mix', off: new Set() };
+
+function terrExcluded(p) {
+  return terr.off.size > 0 && terr.off.has(p.terr?.[terr.level]);
+}
+
+async function buildTerritory() {
+  const level = terr.level;
+  let data;
+  try { data = await getAdminData(level); }
+  catch (e) { console.error('Фильтр территорий: не удалось загрузить границы', e); return; }
+  if (level !== terr.level) return; // уровень успели переключить
+
+  for (const p of state.points) {
+    if (!p.terr) p.terr = {};
+    if (level in p.terr) continue;
+    const f = data.feats.find(ft => ptInFeature(p.lon, p.lat, ft.polys));
+    p.terr[level] = f ? f.name : null;
+  }
+
+  const names = data.feats.map(f => f.name).sort((a, b) => a.localeCompare(b, 'ru'));
+  document.getElementById('terr-list').innerHTML = names.map(n => `
+    <label class="ft-child">
+      <input type="checkbox" data-unit="${escAttr(n)}"${terr.off.has(n) ? '' : ' checked'}>
+      <span class="ft-name">${escHtml(n)}</span>
+      <span class="ft-count"></span>
+    </label>`).join('');
+  updateTerritoryCounts();
+}
+
+/* Счётчики у единиц: точки по фильтру категорий (без учёта фильтра территорий) */
+function updateTerritoryCounts() {
+  const counts = new Map();
+  for (const p of state.points) {
+    if (!state.activeKeys.has(p.g1 + SEP + p.g2)) continue;
+    const u = p.terr?.[terr.level];
+    if (u) counts.set(u, (counts.get(u) || 0) + 1);
+  }
+  document.querySelectorAll('#terr-list input[data-unit]').forEach(cb => {
+    cb.parentElement.querySelector('.ft-count').textContent =
+      (counts.get(cb.dataset.unit) || 0).toLocaleString('ru-RU');
+  });
+}
+
+document.getElementById('terr-level').addEventListener('change', async (e) => {
+  const hadOff = terr.off.size > 0;
+  terr.level = e.target.value;
+  terr.off.clear();
+  await buildTerritory();
+  if (hadOff) refreshMap();
+});
+
+document.getElementById('terr-list').addEventListener('change', (e) => {
+  const u = e.target.dataset.unit;
+  if (u === undefined) return;
+  if (e.target.checked) terr.off.delete(u); else terr.off.add(u);
+  refreshMap();
+});
+
+function setAllTerritory(on) {
+  terr.off.clear();
+  document.querySelectorAll('#terr-list input[data-unit]').forEach(cb => {
+    cb.checked = on;
+    if (!on) terr.off.add(cb.dataset.unit);
+  });
+  refreshMap();
+}
+document.getElementById('btn-terr-all').addEventListener('click', () => setAllTerritory(true));
+document.getElementById('btn-terr-none').addEventListener('click', () => setAllTerritory(false));
 
 /* --- транспортные кольца: Садовое, ТТК, МКАД --- */
 let ringsGj = null;
@@ -1003,6 +1088,7 @@ const overlayRegistry = {
   moscow:  () => adminOverlays.moscow && map.hasLayer(adminOverlays.moscow) ? adminOverlays.moscow : null,
   okruga:  () => adminOverlays.okruga && map.hasLayer(adminOverlays.okruga) ? adminOverlays.okruga : null,
   rayony:  () => adminOverlays.rayony && map.hasLayer(adminOverlays.rayony) ? adminOverlays.rayony : null,
+  mix:     () => adminOverlays.mix && map.hasLayer(adminOverlays.mix) ? adminOverlays.mix : null,
   sadovoe: () => ringLayers['Садовое кольцо'] && map.hasLayer(ringLayers['Садовое кольцо']) ? ringLayers['Садовое кольцо'] : null,
   ttk:     () => ringLayers['ТТК'] && map.hasLayer(ringLayers['ТТК']) ? ringLayers['ТТК'] : null,
   mkad:    () => ringLayers['МКАД'] && map.hasLayer(ringLayers['МКАД']) ? ringLayers['МКАД'] : null

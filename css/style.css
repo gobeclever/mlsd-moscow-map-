@@ -153,7 +153,6 @@ body { overflow-y: auto; overflow-x: hidden; } /* страница скролл�
 .mode-grid-2 { grid-template-columns: 1fr 1fr; }
 
 /* Серая подложка: приглушённый Positron */
-.gray-tiles { filter: grayscale(1) brightness(.94) contrast(.95); }
 .mode-btn {
   flex: 1;
   border: 2px solid var(--metro-blue);
@@ -377,6 +376,7 @@ input[type=range] { width: 100%; accent-color: var(--metro-blue); }
 
 /* Тёмная подложка — фон контейнера */
 #map.dark-base { background: #111; }
+#map.blank-base { background: #fff; }
 
 /* Подписи границ */
 .admin-label {
@@ -470,7 +470,7 @@ input[type=range] { width: 100%; accent-color: var(--metro-blue); }
 
 /* сравнение агрегатов */
 .cmp-controls { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
-.cmp-level { max-width: 340px; flex: 1; min-width: 220px; }
+.cmp-level { max-width: 460px; flex: 1; min-width: 220px; }
 .cmp-metric { margin-top: 0; max-width: 300px; flex: 1; }
 .cmp-body {
   display: grid;

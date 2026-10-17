@@ -66,6 +66,21 @@
       <div id="filter-tree" class="filter-tree"></div>
     </section>
 
+    <!-- Карточка: фильтр по территориям -->
+    <section class="card">
+      <h2 class="card-title">Территории <span class="card-hint">снятые — без точек</span></h2>
+      <select id="terr-level" class="dash-select">
+        <option value="mix" selected>Районы + ТиНАО</option>
+        <option value="rayony">Районы</option>
+        <option value="okruga">Округа</option>
+      </select>
+      <div class="btn-row" style="margin-top:8px">
+        <button id="btn-terr-all" class="btn btn-small">Все</button>
+        <button id="btn-terr-none" class="btn btn-small">Ничего</button>
+      </div>
+      <div id="terr-list" class="filter-tree"></div>
+    </section>
+
     <!-- Кнопка перехода к дэшборду -->
     <button id="btn-goto-dash" class="btn btn-accent btn-goto">Перейти к дэшборду ↓</button>
 
@@ -79,6 +94,7 @@
         <button id="mode-hex" class="mode-btn">Гексагоны</button>
         <button id="mode-okruga" class="mode-btn">По округам</button>
         <button id="mode-rayony" class="mode-btn">По районам</button>
+        <button id="mode-mix" class="mode-btn">Районы + ТиНАО</button>
       </div>
       <div id="hex-controls" class="hex-controls hidden">
         <label class="range-label">Ячейка: <b id="hex-size-label">10 га</b></label>
@@ -113,6 +129,10 @@
         <div class="layer-row" data-key="rayony">
           <span class="order-btns"><button class="ord-up" title="Выше">▲</button><button class="ord-down" title="Ниже">▼</button></span>
           <label class="check-row"><input type="checkbox" id="layer-rayony"> <span>Районы Москвы</span></label>
+        </div>
+        <div class="layer-row" data-key="mix">
+          <span class="order-btns"><button class="ord-up" title="Выше">▲</button><button class="ord-down" title="Ниже">▼</button></span>
+          <label class="check-row"><input type="checkbox" id="layer-mix"> <span>Районы + ТиНАО</span></label>
         </div>
       </div>
     </section>
@@ -150,11 +170,10 @@
     <!-- Карточка: подложка -->
     <section class="card">
       <h2 class="card-title">Подложка</h2>
-      <div class="mode-grid mode-grid-2">
-        <button id="base-positron" class="mode-btn active">Positron</button>
-        <button id="base-gray" class="mode-btn">Серая</button>
-        <button id="base-dark" class="mode-btn">Тёмная</button>
-        <button id="base-osm" class="mode-btn">OSM</button>
+      <div class="mode-grid">
+        <button id="base-osm" class="mode-btn active">OSM</button>
+        <button id="base-satellite" class="mode-btn">Спутник</button>
+        <button id="base-blank" class="mode-btn">Белый лист</button>
       </div>
     </section>
 
@@ -203,11 +222,12 @@
     <!-- 2: выбор структуры агрегации -->
     <section class="card dash-cell">
       <h2 class="card-title">Агрегация <span class="card-hint">по полигональной структуре</span></h2>
-      <div class="mode-grid" style="grid-template-columns:repeat(5,1fr)">
+      <div class="mode-grid">
         <button id="dsc-all" class="mode-btn active">Все точки</button>
         <button id="dsc-moscow" class="mode-btn">Москва</button>
         <button id="dsc-okruga" class="mode-btn">Округ</button>
         <button id="dsc-rayony" class="mode-btn">Район</button>
+        <button id="dsc-mix" class="mode-btn">Район + ТиНАО</button>
         <button id="dsc-zones" class="mode-btn">Зона</button>
       </div>
       <select id="dash-unit" class="dash-select hidden"></select>
@@ -235,6 +255,7 @@
         <div class="mode-switch cmp-level">
           <button id="cmp-okruga" class="mode-btn active">Округа</button>
           <button id="cmp-rayony" class="mode-btn">Районы</button>
+          <button id="cmp-mix" class="mode-btn">Районы + ТиНАО</button>
           <button id="cmp-zones" class="mode-btn">Зоны</button>
         </div>
         <select id="cmp-metric" class="dash-select cmp-metric"></select>
